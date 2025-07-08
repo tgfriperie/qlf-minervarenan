@@ -1,88 +1,89 @@
 import streamlit as st
+import pandas as pd
+import plotly.express as px
+import io
 
-st.title("🚚 Calculadora de Frota - QLF Minerva Foods")
+st.set_page_config(page_title="QLF - Placas por Mês", layout="wide")
+st.title("🚛 QLF - Análise de Placas por Mês")
 
-st.markdown("---")
+uploaded_file = st.file_uploader("📤 Envie sua planilha de viagens", type=["xlsx"])
 
-# ---------------- CALCULADORA COMPLETA ----------------
-st.header("1️⃣ Calculadora Completa (configurável)")
+if uploaded_file:
+    try:
+        xl = pd.ExcelFile(uploaded_file)
+        aba = xl.sheet_names[0]
+        st.success(f"Aba utilizada: {aba}")
+        df = xl.parse(aba)
+    except Exception as e:
+        st.error(f"Erro ao ler o arquivo: {e}")
+        st.stop()
 
-volume = st.number_input("Volume do dia (em kg)", min_value=0, value=30000, step=500)
+    df.columns = df.columns.str.strip()
+    obrigatorias = {"Data", "Tipo veículo", "Placa"}
 
-st.subheader("🔧 Frota disponível (você pode alterar)")
-v_34 = st.number_input("Caminhão 3/4 - Quantidade", value=9)
-v_34_cap = st.number_input("Caminhão 3/4 - Capacidade (kg)", value=3500)
+    if not obrigatorias.issubset(df.columns):
+        st.error(f"❌ Colunas obrigatórias ausentes: {', '.join(obrigatorias - set(df.columns))}")
+        st.stop()
 
-v_semi = st.number_input("Semi Leve - Quantidade", value=6)
-v_semi_cap = st.number_input("Semi Leve - Capacidade (kg)", value=1500)
+    df = df.dropna(subset=["Data", "Tipo veículo", "Placa"])
+    df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
+    df = df.dropna(subset=["Data"])
+    df["AnoMes"] = df["Data"].dt.to_period("M").astype(str)
 
-v_vuc = st.number_input("VUC - Quantidade", value=2)
-v_vuc_cap = st.number_input("VUC - Capacidade (kg)", value=2000)
-
-v_fiorino = st.number_input("Fiorino - Quantidade", value=2)
-v_fiorino_cap = st.number_input("Fiorino - Capacidade (kg)", value=600)
-
-st.markdown("")
-
-# Função para alocar
-def alocar_veiculos(qtd_disp, capacidade, restante):
-    usados = 0
-    for _ in range(qtd_disp):
-        if restante <= 0:
-            break
-        restante -= capacidade
-        usados += 1
-    return usados, max(restante, 0)
-
-restante = volume
-usados = {}
-
-usados["3/4"], restante = alocar_veiculos(v_34, v_34_cap, restante)
-usados["Semi Leve"], restante = alocar_veiculos(v_semi, v_semi_cap, restante)
-usados["VUC"], restante = alocar_veiculos(v_vuc, v_vuc_cap, restante)
-usados["Fiorino"], restante = alocar_veiculos(v_fiorino, v_fiorino_cap, restante)
-
-st.subheader("📊 Resultado da Alocação")
-for tipo, qtd in usados.items():
-    st.write(f"{tipo}: {qtd} veículo(s) usado(s)")
-
-if restante > 0:
-    st.error(f"⚠️ Sobrou {restante} kg sem alocar")
-else:
-    st.success("✅ Volume alocado com sucesso!")
-
-st.markdown("---")
-
-# ---------------- CALCULADORA SIMPLIFICADA ----------------
-st.header("2️⃣ Calculadora Rápida com Médias Fixas")
-
-vol_input = st.number_input("Informe o volume do dia (kg)", min_value=0, value=20000, step=500, key="simples")
-
-# Médias fixas da frota atual
-medias = {
-    "3/4": {"quantidade": 9, "capacidade": 3500},
-    "Semi Leve": {"quantidade": 6, "capacidade": 1500},
-    "VUC": {"quantidade": 2, "capacidade": 2000},
-    "Fiorino": {"quantidade": 2, "capacidade": 600}
-}
-
-restante_simples = vol_input
-usados_simples = {}
-
-# Alocação com médias fixas
-for tipo, info in medias.items():
-    usados_simples[tipo], restante_simples = alocar_veiculos(
-        info["quantidade"], info["capacidade"], restante_simples
+    # Agrupamento base
+    resumo = (
+        df.groupby(["AnoMes", "Tipo veículo"])
+          .agg(Placas_Distintas=("Placa", pd.Series.nunique))
+          .reset_index()
     )
 
-# Exibição dos resultados
-st.subheader("📊 Resultado com Médias Fixas")
-st.markdown(f"**🔢 Volume informado:** {vol_input} kg")
+    # Sidebar para filtros
+    st.sidebar.header("🔍 Filtros")
+    meses = sorted(resumo["AnoMes"].unique())
+    tipos = sorted(resumo["Tipo veículo"].unique())
 
-for tipo, qtd in usados_simples.items():
-    st.markdown(f"- **{tipo}**: {qtd} veículo(s) usado(s)")
+    mes_sel = st.sidebar.selectbox("Filtrar por mês", options=["Todos"] + meses)
+    tipo_sel = st.sidebar.multiselect("Filtrar por tipo de veículo", options=tipos, default=tipos)
 
-if restante_simples > 0:
-    st.error(f"⚠️ Ainda faltam **{restante_simples} kg** sem veículo disponível.")
-else:
-    st.success("✅ Volume atendido com a frota média atual!")
+    # Aplicar filtros
+    df_filtro = resumo.copy()
+    if mes_sel != "Todos":
+        df_filtro = df_filtro[df_filtro["AnoMes"] == mes_sel]
+    if tipo_sel:
+        df_filtro = df_filtro[df_filtro["Tipo veículo"].isin(tipo_sel)]
+
+    st.subheader("📊 Resumo de Placas Distintas")
+    st.dataframe(df_filtro, use_container_width=True)
+
+    # Gráfico
+    st.subheader("📈 Visualização")
+    fig = px.bar(df_filtro, x="AnoMes", y="Placas_Distintas",
+                 color="Tipo veículo", barmode="group",
+                 labels={"Placas_Distintas": "Qtd. de Placas"},
+                 title="Placas distintas por mês e tipo de veículo")
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Destaques do mês
+    if mes_sel != "Todos":
+        destaque = df_filtro.sort_values("Placas_Distintas", ascending=False)
+        st.markdown("### 🏅 Destaques no mês selecionado")
+        col1, col2 = st.columns(2)
+        with col1:
+            total = destaque["Placas_Distintas"].sum()
+            st.metric("Total de veículos no mês", total)
+        with col2:
+            top = destaque.iloc[0]
+            st.metric(f"Mais utilizado", f"{top['Tipo veículo']} ({top['Placas_Distintas']})")
+
+    # Exportação
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        df_filtro.to_excel(writer, sheet_name="placas_filtradas", index=False)
+    buffer.seek(0)
+
+    st.download_button(
+        label="⬇️ Baixar Excel filtrado",
+        data=buffer,
+        file_name="QLF_Placas_Filtrado.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
