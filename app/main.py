@@ -75,6 +75,66 @@ if uploaded_file:
             top = destaque.iloc[0]
             st.metric(f"Mais utilizado", f"{top['Tipo veículo']} ({top['Placas_Distintas']})")
 
+    # --- Cálculos com coluna Peso ---
+    if "Peso" in df.columns:
+        df["Peso"] = pd.to_numeric(df["Peso"], errors="coerce")
+        df = df.dropna(subset=["Peso"])
+
+        peso_agg = (
+            df.groupby(["AnoMes", "Tipo veículo"])
+              .agg(Peso_Total=("Peso", "sum"),
+                   Placas_Distintas=("Placa", pd.Series.nunique))
+              .reset_index()
+        )
+
+        if mes_sel != "Todos":
+            peso_filtro = peso_agg[
+                (peso_agg["AnoMes"] == mes_sel) &
+                (peso_agg["Tipo veículo"].isin(tipo_sel))
+            ]
+
+            if not peso_filtro.empty:
+                # --- Calculadora 1: Estimativa por tipo individual ---
+                st.subheader("🧮 Estimativa de Placas por Tipo de Veículo")
+                peso_input = st.number_input(
+                    "Informe o peso que deseja transportar (em kg)",
+                    min_value=0.0,
+                    value=10000.0,
+                    step=1000.0
+                )
+
+                for _, row in peso_filtro.iterrows():
+                    placas_estimadas = (peso_input * row["Placas_Distintas"]) / row["Peso_Total"]
+                    st.write(f"• **{row['Tipo veículo']}**: aprox. **{placas_estimadas:.1f} placas** para transportar {peso_input:,.0f} kg")
+
+                # --- Calculadora 2: Alocação proporcional baseada em uso histórico ---
+                st.subheader("📊 Alocação Inteligente com Base em Históricos")
+                total_peso_input = st.number_input(
+                    "Informe o volume total a transportar no mês (em kg)",
+                    min_value=0.0,
+                    value=100000.0,
+                    step=10000.0,
+                    key="peso_total_input"
+                )
+
+                peso_total_mes = peso_filtro["Peso_Total"].sum()
+                peso_filtro = peso_filtro.copy()
+                peso_filtro["Perc_uso"] = peso_filtro["Peso_Total"] / peso_total_mes
+                peso_filtro["Peso_medio_por_placa"] = peso_filtro["Peso_Total"] / peso_filtro["Placas_Distintas"]
+
+                st.markdown("### 🚚 Alocação sugerida:")
+                for _, row in peso_filtro.iterrows():
+                    peso_tipo = total_peso_input * row["Perc_uso"]
+                    placas_est = peso_tipo / row["Peso_medio_por_placa"]
+                    st.write(f"• **{row['Tipo veículo']}** → {placas_est:.1f} placas (transportando aprox. {peso_tipo:,.0f} kg)")
+
+            else:
+                st.warning("Sem dados de peso disponíveis para os filtros selecionados.")
+        else:
+            st.info("Selecione um mês específico para ativar as calculadoras.")
+    else:
+        st.warning("⚠️ A coluna 'Peso' (coluna L) não foi encontrada na planilha.")
+
     # Exportação
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
